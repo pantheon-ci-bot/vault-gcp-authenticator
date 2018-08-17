@@ -1,0 +1,46 @@
+---
+version: 2
+jobs:
+  build:
+    docker:
+      - image: circleci/golang:1.10
+    working_directory: /go/src/app
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - v1-dependencies-{{ checksum "Gopkg.lock" }}
+      - run: curl https://raw.githubusercontent.com/golang/dep/master/install.sh | sh
+      - run: make deps
+      - run: make build-release
+      - save_cache:
+          paths:
+            - vendor
+          key: v1-dependencies-{{ checksum "Gopkg.lock" }}
+
+  # build-docker:
+  # TODO
+
+  push-release:
+    docker:
+      - image: circleci/golang:1.10
+    working_directory: /go/src/app
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - v1-dependencies-{{ checksum "Gopkg.lock" }}
+      - run: make push-release
+
+workflows:
+  version: 2
+  run:
+    jobs:
+      - build
+      - push-release:
+          requires:
+            - build
+          filters:
+            branches:
+              only:
+                - master
