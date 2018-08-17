@@ -14,7 +14,7 @@ push-release: build-release ## push a binary release to github releases
 	@ghr -t $$GITHUB_TOKEN \
 		-u $$CIRCLE_PROJECT_USERNAME \
 		-r $$CIRCLE_PROJECT_REPONAME \
-		"$$CIRLCE_BUILD_NUM" \
+		"$$CIRCLE_BUILD_NUM" \
 		./$(APP)
 
 build-docker: ## build docker container
