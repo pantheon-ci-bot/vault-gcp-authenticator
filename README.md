@@ -1,72 +1,49 @@
-# vault-kubernetes-authenticator
+# vault-gcp-authenticator
 
-The `vault-kubernetes-authenticator` is a small application/container that performs the [HashiCorp Vault][vault] [kubernetes authentication process][vault-k8s-auth] and places the Vault token in a well-known, configurable location. It is most commonly used as an init container to supply a Vault token to applications or services that are unaware of Vault.
+The `vault-gcp-authenticator` is a small application/container that performs the [HashiCorp Vault][vault] [GCP authentication process][vault-gcp-auth]
+and places the Vault token in a well-known, configurable location or prints to STDOUT.
 
 [vault]: https://www.vaultproject.io
-[vault-k8s-auth]: https://www.vaultproject.io/docs/auth/kubernetes.html#authentication
+[vault-gcp-auth]: https://www.vaultproject.io/docs/auth/kubernetes.html#authentication
 
+This project was forked from https://github.com/sethvargo/vault-kubernetes-authenticator.
+The GCP and K8S Vault auth backends are very similar with the primary difference being the source
+of the JWT token.
+
+Key changes in this repo:
+
+* Reads instance identity JWT from the Google Cloud Platform's HTTP metadata API. https://cloud.google.com/compute/docs/instances/verifying-instance-identity
+* Uses Vault go client for Vault interactions instead of the Go http client. This allows for all of the standard Vault environment variables to be used.
+* Supports writing Vault token to STDOUT for easier integration in scripts.
+* Arguments can be supplied as flags in addition to environment vars. Vault client args must be specified in the environment.
 
 ## Configuration
 
-- `VAULT_ADDR` - the address to the Vault server, including the protocol and port (like `https://my.vault.server:8200`). This defaults to `https://127.0.0.1:8200` if unspecified.
+- `-d, --destination, $TOKEN_DEST_PATH` - The path on disk to store the token, or "-" for stdout. (default: /.vault-token)
 
-- `VAULT_CAPEM` - the raw PEM contents of the CA file to use for SSL verification.
+- `-r, --role, $VAULT_ROLE` - **Required** The name of the Vault GCP role to use for authentication
 
-- `VAULT_CACERT` - the path on disk to a single CA file to use for TSL verification. 
+- `-m, --metadata-addr, $METADATA_ADDR` - Hostname or IP of the GCP metadata API. (default: metadata.google.internal). This can be useful if you do not use GCP's DNS servers in which case you can specify the IP: `169.254.169.254`
 
-- `VAULT_CAPATH` - the path on disk to a directory of CA files (non-recursive) to use for TLS verification.
+- `-p, --path, $VAULT_GCP_MOUNT_PATH` - The name of the mount where the GCP auth method is enabled. (default: gcp)
 
-- `VAULT_ROLE` - **Required** the name of the Vault role to use for authentication.
+```text
+vault auth enable -path=google gcp -> VAULT_GCP_MOUNT_PATH=google
+```
 
-- `TOKEN_DEST_PATH` - the destination path on disk to store the token. Usually this is a shared volume. Defaults to `/.vault-token`.
-
-- `SERVICE_ACCOUNT_PATH` - the path on disk where the kubernetes service account jtw token lives. This defaults to `/var/run/secrets/kubernetes.io/serviceaccount/token`.
-
-- `VAULT_K8S_MOUNT_PATH` - the name of the mount where the Kubernetes auth method is enabled. This defaults to `kubernetes`, but if you changed the mount path you will need to set this value to that path.
-
-  ```text
-  vault auth enable -path=k8s kubernetes -> VAULT_K8S_MOUNT_PATH=k8s
-  ```
+- The Vault Go Library is used to manage Vault communications which means all of the standard Vault environment variables are available
+  such as `VAULT_ADDR`, `VAULT_CAPATH`, `VAULT_CACERT`, etc. https://www.vaultproject.io/docs/commands/index.html#environment-variables
 
 ## Example Usage
 
-```yaml
----
-apiVersion: v1
-kind: Pod
-metadata:
-  name: vault-sidecar
-spec:
-  volumes:
-  - name: vault-token
-    emptyDir:
-      medium: Memory
+```shell
+#!/bin/bash
 
-  initContainers:
-  # The vault-authenticator container authenticates the container using the
-  # kubernetes auth method and puts the resulting token on the filesystem.
-  - name: vault-authenticator
-    image: sethvargo/vault-kubernetes-authenticator:0.1.0
-    volumeMounts:
-    - name: vault-token
-      mountPath: /home/vault
-    env:
-    - name: TOKEN_DEST_PATH
-      value: /home/vault/.vault-token
-    - name: VAULT_ROLE
-      value: myapp-role
+set -eou pipefail
 
-  containers:
-    # Your other containers would read from /home/vault/.vault-token, or set
-    # HOME to /home/vault
-  - name: consul-template
-    image: hashicorp/consul-template:0.19.5.alpine
-    volumeMounts:
-    - name: vault-token
-      mountPath: /home/vault
-    env:
-    - name: HOME
-      value: /home/vault
+export VAULT_ADDR="https://vault:8200"
+export VAULT_TOKEN=$(/bin/vault-gcp-authenticator -r myapp-role)
 
-  # ...
+vault read secret/foo >/etc/myapp/secrets
+vault write pki/issue/cert common_name="myapp" # parse key and cert, store to disk
 ```

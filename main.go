@@ -2,86 +2,76 @@ package main
 
 import (
 	"bytes"
-	"crypto/tls"
-	"crypto/x509"
-	"encoding/json"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
-	"strings"
+	"time"
 
+	vault "github.com/hashicorp/vault/api"
+	flags "github.com/jessevdk/go-flags"
 	"github.com/pkg/errors"
-	"golang.org/x/net/http2"
 )
 
-var (
-	vaultAddr         string
-	vaultCaPem        string
-	vaultCaCert       string
-	vaultCaPath       string
-	vaultServerName   string
-	vaultK8SMountPath string
-)
+type options struct {
+	Dest     string `short:"d" long:"destination" description:"The path on disk to store the token. Use '-' for stdout." default:"/.vault-token" required:"true" env:"TOKEN_DEST_PATH"`
+	Role     string `short:"r" long:"role" description:"The name of the Vault GCP role to use for authentication" required:"true" env:"VAULT_ROLE"`
+	Path     string `short:"p" long:"path" description:"The name of the mount where the GCP auth method is enabled." default:"gcp" required:"true" env:"VAULT_GCP_MOUNT_PATH"`
+	MetaAddr string `short:"m" long:"metadata-addr" description:"Hostname or IP of the GCP metadata API." default:"metadata.google.internal" required:"true" env:"METADATA_ADDR"`
+}
 
 func main() {
-	vaultAddr = os.Getenv("VAULT_ADDR")
-	if vaultAddr == "" {
-		vaultAddr = "https://127.0.0.1:8200"
+	opts := options{}
+
+	if _, err := flags.Parse(&opts); err != nil {
+		os.Exit(2)
 	}
 
-	vaultCaPem = os.Getenv("VAULT_CAPEM")
-	vaultCaCert = os.Getenv("VAULT_CACERT")
-	vaultCaPath = os.Getenv("VAULT_CAPATH")
-	vaultServerName = os.Getenv("VAULT_TLS_SERVER_NAME")
-
-	vaultK8SMountPath = os.Getenv("VAULT_K8S_MOUNT_PATH")
-	if vaultK8SMountPath == "" {
-		vaultK8SMountPath = "kubernetes"
-	}
-
-	role := os.Getenv("VAULT_ROLE")
-	if role == "" {
-		log.Fatal("missing VAULT_ROLE")
-	}
-
-	dest := os.Getenv("TOKEN_DEST_PATH")
-	if dest == "" {
-		dest = "/.vault-token"
-	}
-
-	saPath := os.Getenv("SERVICE_ACCOUNT_PATH")
-	if saPath == "" {
-		saPath = "/var/run/secrets/kubernetes.io/serviceaccount/token"
-	}
-
-	// Read the JWT token from disk
-	jwt, err := readJwtToken(saPath)
+	jwt, err := readJwtToken(opts.MetaAddr, opts.Role)
 	if err != nil {
 		log.Fatal(err)
 	}
+	log.Println(jwt) // TODO remove
 
 	// Authenticate to vault using the jwt token
-	token, err := authenticate(role, jwt)
+	token, err := authenticate(opts.Role, opts.Path, jwt)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	// Persist the vault token to disk
-	if err := saveToken(token, dest); err != nil {
+	// Persist the vault token to disk or print to stdout if TOKEN_DEST_PATH == "-"
+	if opts.Dest == "-" {
+		fmt.Println(token)
+		os.Exit(0)
+	}
+	if err := saveToken(token, opts.Dest); err != nil {
 		log.Fatal(err)
 	}
-
-	log.Printf("successfully stored vault token at %s", dest)
+	log.Printf("successfully stored vault token at %s", opts.Dest)
 
 	os.Exit(0)
 }
 
-func readJwtToken(path string) (string, error) {
-	data, err := ioutil.ReadFile(path)
+// readJwtToken fetchs the instance's default identity token from the google compute metadata API
+// the aud value is set to 'vault/VAULT_ROLE' as required by vault
+func readJwtToken(addr, role string) (string, error) {
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+	audience := "vault/" + role
+	url := fmt.Sprintf("http://%s/computeMetadata/v1/instance/service-accounts/default/identity?audience=%s&format=full", addr, audience)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return "", errors.Wrap(err, "failed to create HTTP GET request")
+	}
+	req.Header.Add("Metadata-Flavor", "Google")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", errors.Wrap(err, "failed to make HTTP request to metadata API")
+	}
+	defer resp.Body.Close()
+	data, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		return "", errors.Wrap(err, "failed to read jwt token")
 	}
@@ -89,144 +79,32 @@ func readJwtToken(path string) (string, error) {
 	return string(bytes.TrimSpace(data)), nil
 }
 
-func authenticate(role, jwt string) (string, error) {
-	// Setup the TLS (especially required for custom CAs)
-	rootCAs, err := rootCAs()
+// authenticate to a vault gcp auth backend with a gcp instance identity JWT
+func authenticate(role, mountPath, jwt string) (string, error) {
+	client, err := vault.NewClient(nil)
 	if err != nil {
-		return "", err
+		return "", errors.Wrap(err, "failed to create Vault client")
 	}
-
-	tlsClientConfig := &tls.Config{
-		MinVersion: tls.VersionTLS12,
-		RootCAs:    rootCAs,
+	path := "auth/" + mountPath + "/login"
+	body := map[string]interface{}{
+		"role": role,
+		"jwt":  jwt,
 	}
-
-	if vaultServerName != "" {
-		tlsClientConfig.ServerName = vaultServerName
-	}
-
-	transport := &http.Transport{
-		TLSClientConfig: tlsClientConfig,
-	}
-
-	if err := http2.ConfigureTransport(transport); err != nil {
-		return "", errors.New("failed to configure http2")
-	}
-
-	client := &http.Client{
-		Transport: transport,
-	}
-
-	addr := vaultAddr + "/v1/auth/" + vaultK8SMountPath + "/login"
-	body := fmt.Sprintf(`{"role": "%s", "jwt": "%s"}`, role, jwt)
-
-	req, err := http.NewRequest(http.MethodPost, addr, strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Logical().Write(path, body)
 	if err != nil {
-		return "", errors.Wrap(err, "failed to create request")
+		return "", errors.Wrap(err, "failed to get successful response")
 	}
-
-	resp, err := client.Do(req)
+	token, err := resp.TokenID()
 	if err != nil {
-		return "", errors.Wrap(err, "failed to login")
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		var b bytes.Buffer
-		io.Copy(&b, resp.Body)
-		return "", fmt.Errorf("failed to get successful response: %#v, %s",
-			resp, b.String())
+		return "", errors.Wrap(err, "failed to get token")
 	}
 
-	var s struct {
-		Auth struct {
-			ClientToken string `json:"client_token"`
-		} `json:"auth"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&s); err != nil {
-		return "", errors.Wrap(err, "failed to read body")
-	}
-
-	return s.Auth.ClientToken, nil
+	return token, nil
 }
 
 func saveToken(token, dest string) error {
 	if err := ioutil.WriteFile(dest, []byte(token), 0600); err != nil {
 		return errors.Wrap(err, "failed to save token")
-	}
-	return nil
-}
-
-// rootCAs returns the list of trusted root CAs based off the provided
-// configuration. If no CAs were specified, the system roots are used.
-func rootCAs() (*x509.CertPool, error) {
-	switch {
-	case vaultCaPem != "":
-		pool := x509.NewCertPool()
-		if err := loadCert(pool, []byte(vaultCaPem)); err != nil {
-			return nil, err
-		}
-		return pool, nil
-	case vaultCaCert != "":
-		pool := x509.NewCertPool()
-		if err := loadCertFile(pool, vaultCaCert); err != nil {
-			return nil, err
-		}
-		return pool, nil
-	case vaultCaPath != "":
-		pool := x509.NewCertPool()
-		if err := loadCertFolder(pool, vaultCaPath); err != nil {
-			return nil, err
-		}
-		return pool, nil
-	default:
-		pool, err := x509.SystemCertPool()
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to load system certs")
-		}
-		return pool, err
-	}
-}
-
-// loadCert loads a single pem-encoded certificate into the given pool.
-func loadCert(pool *x509.CertPool, pem []byte) error {
-	if ok := pool.AppendCertsFromPEM(pem); !ok {
-		return fmt.Errorf("failed to parse PEM")
-	}
-	return nil
-}
-
-// loadCertFile loads the certificate at the given path into the given pool.
-func loadCertFile(pool *x509.CertPool, p string) error {
-	pem, err := ioutil.ReadFile(p)
-	if err != nil {
-		return errors.Wrap(err, "failed to read CA file from disk")
-	}
-
-	if err := loadCert(pool, pem); err != nil {
-		return errors.Wrapf(err, "failed to load CA at %s", p)
-	}
-
-	return nil
-}
-
-// loadCertFolder iterates exactly one level below the given directory path and
-// loads all certificates in that path. It does not recurse
-func loadCertFolder(pool *x509.CertPool, p string) error {
-	if err := filepath.Walk(p, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		if info.IsDir() {
-			return nil
-		}
-
-		return loadCertFile(pool, path)
-	}); err != nil {
-		return errors.Wrapf(err, "failed to load CAs at %s", p)
 	}
 	return nil
 }
