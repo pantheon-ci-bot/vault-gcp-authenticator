@@ -36,10 +36,12 @@ jobs:
   push-docker:
     docker:
       - image: circleci/golang:1.10
+    working_directory: /go/src/app
     steps:
       - attach_workspace:
           at: .
       - setup_remote_docker
+      - run: docker login -u $DOCKER_HUB_USER -p $DOCKER_HUB_PASSWD
       - run: make build-docker CIRCLE_BUILD_NUM=$(cat ./circle-build-num)
       - run: make push-docker CIRCLE_BUILD_NUM=$(cat ./circle-build-num)
 
