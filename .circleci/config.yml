@@ -1,6 +1,7 @@
 ---
 version: 2
 jobs:
+
   build:
     docker:
       - image: circleci/golang:1.10
@@ -13,24 +14,34 @@ jobs:
       - run: curl https://raw.githubusercontent.com/golang/dep/master/install.sh | sh
       - run: make deps
       - run: make build-release
+      - run: echo $CIRCLE_BUILD_NUM >./circle-build-num
       - save_cache:
           paths:
             - vendor
           key: v1-dependencies-{{ checksum "Gopkg.lock" }}
-
-  # build-docker:
-  # TODO
+      - persist_to_workspace:
+          root: .
+          paths:
+            - ./
 
   push-release:
     docker:
       - image: circleci/golang:1.10
     working_directory: /go/src/app
     steps:
-      - checkout
-      - restore_cache:
-          keys:
-            - v1-dependencies-{{ checksum "Gopkg.lock" }}
-      - run: make push-release
+      - attach_workspace:
+          at: .
+      - run: make push-release CIRCLE_BUILD_NUM=$(cat ./circle-build-num)
+
+  push-docker:
+    docker:
+      - image: circleci/golang:1.10
+    steps:
+      - attach_workspace:
+          at: .
+      - setup_remote_docker
+      - run: make build-docker CIRCLE_BUILD_NUM=$(cat ./circle-build-num)
+      - run: make push-docker CIRCLE_BUILD_NUM=$(cat ./circle-build-num)
 
 workflows:
   version: 2
@@ -44,3 +55,11 @@ workflows:
             branches:
               only:
                 - master
+      - push-docker:
+          requires:
+            - build
+          filters:
+            branches:
+              only:
+                - master
+
