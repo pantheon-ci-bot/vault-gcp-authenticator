@@ -1,5 +1,7 @@
 # vault-gcp-authenticator
 
+[![Docker Repository on Quay](https://quay.io/repository/getpantheon/vault-gcp-authenticator/status "Docker Repository on Quay")](https://quay.io/repository/getpantheon/vault-gcp-authenticator)
+
 The `vault-gcp-authenticator` is a small application/container that performs the [HashiCorp Vault][vault] [GCP authentication process][vault-gcp-auth]
 and places the Vault token in a well-known, configurable location or prints to STDOUT.
 
@@ -16,6 +18,22 @@ Key changes in this repo:
 * Uses Vault go client for Vault interactions instead of the Go http client. This allows for all of the standard Vault environment variables to be used.
 * Supports writing Vault token to STDOUT for easier integration in scripts.
 * Arguments can be supplied as flags in addition to environment vars. Vault client args must be specified in the environment.
+
+## Installation
+
+* Static binaries for linux/amd64 are available from the [Github Releases](https://github.com/pantheon-systems/vault-gcp-authenticator/releases) page
+* Docker container: quay.io/getpantheon/vault-gcp-authenticator
+
+The following command can be used in an installation script or Dockerfile to install the latest
+release:
+
+```shell
+curl -s https://api.github.com/repos/pantheon-systems/vault-gcp-authenticator/releases/latest | \
+    grep browser_download | \
+    cut -d '"' -f 4 | \
+    xargs curl -O -L \
+  && chmod 755 ./vault-gcp-authenticator
+```
 
 ## Configuration
 
