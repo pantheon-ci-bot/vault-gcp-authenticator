@@ -32,7 +32,6 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Println(jwt) // TODO remove
 
 	// Authenticate to vault using the jwt token
 	token, err := authenticate(opts.Role, opts.Path, jwt)
