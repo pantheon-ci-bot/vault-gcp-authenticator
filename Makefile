@@ -1,5 +1,5 @@
 APP := vault-gcp-authenticator
-IMAGE := joemiller/$(APP)
+IMAGE := quay.io/getpantheon/$(APP)
 
 ifdef CIRCLE_BUILD_NUM
 	TAG := $$CIRCLE_BUILD_NUM
