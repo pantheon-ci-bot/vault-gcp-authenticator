@@ -41,7 +41,7 @@ jobs:
       - attach_workspace:
           at: .
       - setup_remote_docker
-      - run: docker login -u $QUAY_USER -p $QUAY_PASSWD
+      - run: docker login -u "$QUAY_USER" -p "$QUAY_PASSWD" quay.io
       - run: make build-docker CIRCLE_BUILD_NUM=$(cat ./circle-build-num)
       - run: make push-docker CIRCLE_BUILD_NUM=$(cat ./circle-build-num)
 
