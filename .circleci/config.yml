@@ -1,49 +1,73 @@
 ---
-version: 2
-jobs:
+version: 2.1
 
-  build:
+executors:
+  go-build:
     docker:
-      - image: circleci/golang:1.10
-    working_directory: /go/src/app
+      - image: cimg/go:1.15
+
+commands:
+  # commands to persist and load CIRCLE_BUILD_NUM across jobs
+  save-build-num:
     steps:
-      - checkout
+      - run: echo "export CIRCLE_BUILD_NUM=$CIRCLE_BUILD_NUM" > circle-build-num
+  load-build-num:
+    steps:
+      - run: cat circle-build-num >> $BASH_ENV
+
+  # go.mod caching
+  save-go-mod-cache:
+    steps:
+      - save_cache:
+          key: v3-dependencies-{{ checksum "go.sum" }}
+          paths:
+            - /go/pkg/mod
+            - /home/circleci/go/pkg/mod
+  restore-go-mod-cache:
+    steps:
       - restore_cache:
           keys:
-            - v1-dependencies-{{ checksum "Gopkg.lock" }}
-      - run: curl https://raw.githubusercontent.com/golang/dep/master/install.sh | sh
-      - run: make deps
-      - run: make build-release
-      - run: echo $CIRCLE_BUILD_NUM >./circle-build-num
-      - save_cache:
-          paths:
-            - vendor
-          key: v1-dependencies-{{ checksum "Gopkg.lock" }}
+            - v3-dependencies-{{ checksum "go.sum" }}
+
+  # save / load workspace
+  save-workspace:
+    steps:
       - persist_to_workspace:
           root: .
           paths:
             - ./
+  restore-workspace:
+    steps:
+      - attach_workspace:
+          at: .
+
+jobs:
+  build:
+    executor: go-build
+    steps:
+      - checkout
+      - restore-go-mod-cache
+      - save-build-num
+      - run: make build-release
+      - save-go-mod-cache
+      - save-workspace
 
   push-release:
-    docker:
-      - image: circleci/golang:1.10
-    working_directory: /go/src/app
+    executor: go-build
     steps:
-      - attach_workspace:
-          at: .
-      - run: make push-release CIRCLE_BUILD_NUM=$(cat ./circle-build-num)
+      - restore-workspace
+      - load-build-num
+      - run: make push-release
 
   push-docker:
-    docker:
-      - image: circleci/golang:1.10
-    working_directory: /go/src/app
+    executor: go-build
     steps:
-      - attach_workspace:
-          at: .
       - setup_remote_docker
+      - restore-workspace
+      - load-build-num
       - run: docker login -u "$QUAY_USER" -p "$QUAY_PASSWD" quay.io
-      - run: make build-docker CIRCLE_BUILD_NUM=$(cat ./circle-build-num)
-      - run: make push-docker CIRCLE_BUILD_NUM=$(cat ./circle-build-num)
+      - run: make build-docker
+      - run: make push-docker
 
 workflows:
   version: 2

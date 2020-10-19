@@ -7,9 +7,6 @@ else
 	TAG := dev
 endif
 
-deps: ## install deps
-	@dep ensure
-
 build: ## build binary for current architecture
   @CGO_ENABLED=0 go build -o $(APP)
 
