@@ -1,6 +1,8 @@
 # vault-gcp-authenticator
 
 [![Docker Repository on Quay](https://quay.io/repository/getpantheon/vault-gcp-authenticator/status "Docker Repository on Quay")](https://quay.io/repository/getpantheon/vault-gcp-authenticator)
+[![Unofficial](https://img.shields.io/badge/Pantheon-Unofficial-yellow?logo=pantheon&color=FFDC28)](https://pantheon.io/docs/oss-support-levels#unofficial)
+
 
 The `vault-gcp-authenticator` is a small application/container that performs the [HashiCorp Vault][vault] [GCP authentication process][vault-gcp-auth]
 and places the Vault token in a well-known, configurable location or prints to STDOUT.
